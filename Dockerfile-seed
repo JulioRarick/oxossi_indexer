@@ -1,7 +1,0 @@
-FROM mongo:4.4
-
-# Copia o script de seed para o container
-COPY ./init-scripts/mongo-seed.js /docker-entrypoint-initdb.d/mongo-seed.js
-
-# Define o comando padrão para inicializar o seed
-CMD ["mongod"]
