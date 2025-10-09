@@ -1,0 +1,70 @@
+# Docker ignore file to reduce Docker context size and improve build performance
+
+# PDF directories (will be mounted as volumes)
+/src/pdfs/
+/src/pdfs
+
+# Temporary and cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Version control
+.git/
+.gitignore
+
+# Logs
+*.log
+logs/
+log/
+
+# Testing
+test_*.py
+*_test.py
+test-results/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment and config
+.env.local
+.env.development
+.env.test
+venv/
+.venv/
+
+# Docker files themselves - not needed in context
+Dockerfile.dev
+docker-compose.dev.yaml
+
+# Editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large database dumps
+*.dump
+*.sql.gz
+db_backups/
+
+# OS files
+.DS_Store
+Thumbs.db
