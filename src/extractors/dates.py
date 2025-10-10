@@ -1,10 +1,10 @@
 import re
-import numpy as np
 import json
 import argparse
 import logging
 import os
 import sys
+import statistics
 from typing import Optional, Dict, List, Tuple, Any, Union
 
 from utils.pdf_utils import extract_text_from_pdf
@@ -143,13 +143,19 @@ class DateExtractor:
             return results 
 
         try:
-            years_array = np.array(combined_years)
-            results['mean'] = float(np.mean(years_array))
-            results['median'] = float(np.median(years_array))
-            results['minimum'] = int(np.min(years_array))
-            results['maximum'] = int(np.max(years_array))
+            results['mean'] = float(statistics.mean(combined_years))
+            results['median'] = float(statistics.median(combined_years))
+            results['minimum'] = int(min(combined_years))
+            results['maximum'] = int(max(combined_years))
             
-            results['standard_deviation'] = float(np.std(years_array)) if len(years_array) > 1 else 0.0
+            # Calcula desvio padrão manualmente
+            if len(combined_years) > 1:
+                mean_val = results['mean']
+                variance = sum((x - mean_val) ** 2 for x in combined_years) / len(combined_years)
+                results['standard_deviation'] = float(variance ** 0.5)
+            else:
+                results['standard_deviation'] = 0.0
+                
             results['full_range'] = f"{results['minimum']} - {results['maximum']}"
 
             if results['mean'] is not None and results['standard_deviation'] is not None:
@@ -162,7 +168,7 @@ class DateExtractor:
             log.info("Análise estatística das datas concluída.")
 
         except Exception as e:
-            log.error(f"Erro durante cálculos estatísticos com NumPy: {e}", exc_info=True)
+            log.error(f"Erro durante cálculos estatísticos: {e}", exc_info=True)
             
             results.update({
                 'mean': None, 'median': None, 'standard_deviation': None,
@@ -171,15 +177,172 @@ class DateExtractor:
 
         return results
 
-    def extract_dates(self, text: str) -> List[str]:
+    def extract_dates(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Extrai datas do texto retornando informações detalhadas
+        """
         results = self.extract_and_analyze_dates(text)
-        return results.get('combined_representative_years', [])
+        
+        date_infos = []
+        
+        # Adiciona anos numéricos diretos
+        for year in results.get('direct_numeric_years', []):
+            date_infos.append({
+                'year': year,
+                'type': 'numeric',
+                'century': self._year_to_century(year)
+            })
+        
+        # Adiciona intervalos textuais
+        for start, end in results.get('calculated_textual_intervals', []):
+            representative_year = int(round((start + end) / 2))
+            date_infos.append({
+                'year': representative_year,
+                'year_start': start,
+                'year_end': end,
+                'type': 'textual',
+                'century': self._year_to_century(representative_year)
+            })
+        
+        return date_infos
+
+    def _year_to_century(self, year: int) -> str:
+        """Converte ano para século"""
+        century_num = ((year - 1) // 100) + 1
+        if century_num <= 20:
+            century_romans = {
+                1: 'I', 2: 'II', 3: 'III', 4: 'IV', 5: 'V',
+                6: 'VI', 7: 'VII', 8: 'VIII', 9: 'IX', 10: 'X',
+                11: 'XI', 12: 'XII', 13: 'XIII', 14: 'XIV', 15: 'XV',
+                16: 'XVI', 17: 'XVII', 18: 'XVIII', 19: 'XIX', 20: 'XX'
+            }
+            return f"século {century_romans.get(century_num, str(century_num))}"
+        return f"século {century_num}"
+
+    def calcular_media_dma_temporal(self, text: str, ano_inicio: int = 1200, ano_fim: int = 2025) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Calcula média e DMA dos anos encontrados no texto usando análise contextual avançada
+        
+        Args:
+            text: Texto para análise
+            ano_inicio: Ano mínimo do período
+            ano_fim: Ano máximo do período
+        
+        Returns:
+            Tuple com (media, dma) ou (None, None) se nenhum ano encontrado
+        """
+        try:
+            # Extrai dados de datas
+            dates_data = self.extract_dates(text)
+            
+            # Coleta anos válidos
+            anos_encontrados = []
+            for date_info in dates_data:
+                if 'year' in date_info:
+                    year = date_info['year']
+                    if ano_inicio <= year <= ano_fim:
+                        anos_encontrados.append(year)
+                
+                # Inclui ano inicial de intervalos textuais
+                if 'year_start' in date_info and date_info.get('type') == 'textual':
+                    year_start = date_info['year_start']
+                    if ano_inicio <= year_start <= ano_fim:
+                        anos_encontrados.append(year_start)
+            
+            if not anos_encontrados:
+                return None, None
+            
+            # Remove duplicatas
+            anos_unicos = list(set(anos_encontrados))
+            
+            # Calcula média
+            media = sum(anos_unicos) / len(anos_unicos)
+            
+            # Calcula DMA (Desvio Médio Absoluto)
+            desvios_absolutos = [abs(ano - media) for ano in anos_unicos]
+            dma = sum(desvios_absolutos) / len(desvios_absolutos)
+            
+            return round(media), round(dma)
+            
+        except Exception as e:
+            log.error(f"Erro no cálculo de média e DMA: {e}")
+            return None, None
+
+    def _analyze_temporal_context(self, text: str) -> Dict[str, Any]:
+        """Análise temporal completa do documento"""
+        try:
+            # Calcula média e DMA
+            media, dma = self.calcular_media_dma_temporal(text)
+            
+            # Extrai dados de datas
+            dates_data = self.extract_dates(text)
+            years = [d['year'] for d in dates_data if 'year' in d]
+            
+            # Calcula consistência
+            consistencia = self._calculate_temporal_consistency(years)
+            
+            # Extrai séculos mencionados
+            seculos = list(set(d.get('century') for d in dates_data if d.get('century')))
+            
+            return {
+                'media_anos': media,
+                'desvio_medio_absoluto': dma,
+                'anos_encontrados': len(years),
+                'periodo_principal': {
+                    'inicio': min(years) if years else None,
+                    'fim': max(years) if years else None
+                },
+                'seculos_mencionados': seculos,
+                'consistencia_temporal': consistencia,
+                'anos_listados': sorted(list(set(years))) if years else []
+            }
+            
+        except Exception as e:
+            log.error(f"Erro na análise temporal: {e}")
+            return {
+                'media_anos': None,
+                'desvio_medio_absoluto': None,
+                'anos_encontrados': 0,
+                'periodo_principal': {'inicio': None, 'fim': None},
+                'seculos_mencionados': [],
+                'consistencia_temporal': 0.0,
+                'anos_listados': []
+            }
+
+    def _calculate_temporal_consistency(self, years: List[int]) -> float:
+        """
+        Calcula consistência temporal do documento
+        Documentos com anos próximos têm maior consistência
+        """
+        if len(years) < 2:
+            return 1.0
+        
+        # Ordena anos e calcula gaps
+        years_sorted = sorted(years)
+        gaps = [years_sorted[i+1] - years_sorted[i] for i in range(len(years_sorted)-1)]
+        
+        # Se não há gaps, retorna 1.0
+        if not gaps:
+            return 1.0
+        
+        avg_gap = sum(gaps) / len(gaps)
+        max_gap = max(gaps)
+        
+        # Classifica consistência baseada no gap máximo
+        if max_gap <= 10:  # Anos muito próximos
+            return 0.9
+        elif max_gap <= 25:  # Anos relativamente próximos
+            return 0.7
+        elif max_gap <= 50:  # Anos moderadamente distantes
+            return 0.5
+        else:  # Anos muito distantes
+            return 0.3
 
 def load_date_config(config_path: str) -> Optional[Dict[str, Any]]:
     extractor = DateExtractor("")  
     return extractor._load_date_config(config_path)
 
-def extract_dates(text: str, config: Dict[str, Any]) -> List[str]:
+def extract_dates(text: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
     extractor = DateExtractor(config)
     return extractor.extract_dates(text)
 
