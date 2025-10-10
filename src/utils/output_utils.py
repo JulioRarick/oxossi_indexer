@@ -10,8 +10,34 @@ def format_and_output_json(
     data: Optional[Dict[str, Any]],
     status: str = "Sucesso",
     message: str = "Operação concluída.",
-    output_file: Optional[str] = None
+    output_file: Optional[str] = None,
+    elasticsearch_format: bool = False
 ) -> None:
+    # Formata para Elasticsearch se solicitado
+    if elasticsearch_format and data:
+        try:
+            from .elasticsearch_formatter import ElasticsearchFormatter
+            formatter = ElasticsearchFormatter()
+            
+            # Detecta tipo de dados e formata adequadamente
+            if isinstance(data, list):
+                formatted_data = []
+                for item in data:
+                    if item.get('is_scraped_item'):
+                        formatted_data.append(formatter.format_scraped_item(item))
+                    else:
+                        formatted_data.append(formatter.format_pdf_document(item))
+                data = formatted_data
+            elif isinstance(data, dict):
+                if data.get('is_scraped_item'):
+                    data = formatter.format_scraped_item(data)
+                else:
+                    data = formatter.format_pdf_document(data)
+        except ImportError:
+            log.warning("ElasticsearchFormatter não disponível. Usando formato padrão.")
+        except Exception as e:
+            log.error(f"Erro ao formatar para Elasticsearch: {e}. Usando formato padrão.")
+
     output_structure = {
         "status": status,
         "message": message,
@@ -46,6 +72,88 @@ def format_and_output_json(
         print("\n--- Erro na Saída JSON ---")
         print(f'{{"status": "Erro", "message": "Falha inesperada ao gerar saída JSON: {e}", "results": null}}')
         print("--------------------------")
+
+def export_to_elasticsearch_format(
+    data: Optional[Dict[str, Any]],
+    index_name: str = "oxossi_documents",
+    output_file: Optional[str] = None,
+    include_mapping: bool = True
+) -> Optional[Dict[str, Any]]:
+    """
+    Exporta dados no formato otimizado para Elasticsearch
+    
+    Args:
+        data: Dados para exportar
+        index_name: Nome do índice Elasticsearch
+        output_file: Arquivo opcional para salvar
+        include_mapping: Se deve incluir mapeamento do índice
+        
+    Returns:
+        Dicionário com dados formatados ou None em caso de erro
+    """
+    try:
+        from .elasticsearch_formatter import format_documents_for_elasticsearch
+        
+        if not data:
+            log.warning("Nenhum dado fornecido para exportação Elasticsearch")
+            return None
+        
+        # Converte dados para lista se necessário
+        documents = data if isinstance(data, list) else [data]
+        
+        # Formata documentos
+        elasticsearch_output = format_documents_for_elasticsearch(documents, index_name)
+        
+        # Adiciona informações do mapeamento se solicitado
+        if include_mapping:
+            output_structure = {
+                "elasticsearch_ready": True,
+                "index_name": index_name,
+                "mapping": elasticsearch_output["index_mapping"],
+                "bulk_data_lines": len(elasticsearch_output["bulk_data"]),
+                "total_documents": elasticsearch_output["total_documents"],
+                "formatted_at": elasticsearch_output["formatted_at"],
+                "bulk_data": elasticsearch_output["bulk_data"][:10] if len(elasticsearch_output["bulk_data"]) > 10 else elasticsearch_output["bulk_data"]  # Mostra apenas primeiras 10 linhas
+            }
+        else:
+            output_structure = {
+                "elasticsearch_ready": True,
+                "index_name": index_name,
+                "bulk_data": elasticsearch_output["bulk_data"],
+                "total_documents": elasticsearch_output["total_documents"]
+            }
+        
+        # Exibe saída
+        print("\n--- Dados Formatados para Elasticsearch ---")
+        print(f"Índice: {index_name}")
+        print(f"Documentos: {elasticsearch_output['total_documents']}")
+        print(f"Linhas bulk API: {len(elasticsearch_output['bulk_data'])}")
+        
+        if include_mapping:
+            print("Mapeamento do índice incluído.")
+        
+        print("--- Exemplo das primeiras linhas bulk ---")
+        for i, line in enumerate(elasticsearch_output["bulk_data"][:4]):
+            print(f"Linha {i+1}: {line}")
+        print("------------------------------------------")
+        
+        # Salva em arquivo se especificado
+        if output_file:
+            try:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(output_structure, f, indent=2, ensure_ascii=False)
+                log.info(f"Dados Elasticsearch salvos em '{output_file}'")
+            except IOError as e:
+                log.error(f"Erro ao salvar arquivo Elasticsearch: {e}")
+        
+        return output_structure
+        
+    except ImportError:
+        log.error("ElasticsearchFormatter não encontrado. Verifique se o módulo está instalado.")
+        return None
+    except Exception as e:
+        log.error(f"Erro ao exportar para formato Elasticsearch: {e}", exc_info=True)
+        return None
 
 def format_scraped_item(doc: Dict[str, Any]) -> Dict[str, Any]:
     """
