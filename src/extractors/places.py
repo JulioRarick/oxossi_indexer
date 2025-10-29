@@ -76,6 +76,23 @@ class PlaceExtractor:
              return {}
 
         return dict(captaincy_data)
+    
+    def extract_places(self, text: str) -> Dict[str, Any]:
+        """ 
+        Método wrapper para extração de locais, usando os dados internos.
+        Este é o método que o run_indexer.py deve chamar.
+        """
+        if not self.data:
+            log.warning("Chamada a extract_places, mas dados de local estão vazios.")
+            return {
+                "found_places_details": [],
+                "top_captaincy": None,
+                "all_captaincy_scores": {},
+                "warning": "Dados de local não carregados na inicialização."
+            }
+            
+        # Chama o método de análise principal, passando o texto e os dados internos
+        return self.search_colonial_places(text, self.data)
 
     def search_colonial_places(self, text: str, captaincy_data: Dict[str, List[str]]) -> Dict[str, Any]:
         results_template: Dict[str, Any] = {
