@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, Optional
+from .elasticsearch_formatter import ElasticsearchFormatter, format_documents_for_elasticsearch
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(module)s - %(message)s')
 log = logging.getLogger(__name__)
@@ -73,26 +74,23 @@ def format_and_output_json(
         print(f'{{"status": "Erro", "message": "Falha inesperada ao gerar saída JSON: {e}", "results": null}}')
         print("--------------------------")
 
+# No final da função export_to_elasticsearch_format
+
 def export_to_elasticsearch_format(
     data: Optional[Dict[str, Any]],
-    index_name: str = "oxossi_documents",
+    index_name: str = "oxossi_docs_index",
     output_file: Optional[str] = None,
     include_mapping: bool = True
 ) -> Optional[Dict[str, Any]]:
     """
     Exporta dados no formato otimizado para Elasticsearch
-    
-    Args:
-        data: Dados para exportar
-        index_name: Nome do índice Elasticsearch
-        output_file: Arquivo opcional para salvar
-        include_mapping: Se deve incluir mapeamento do índice
-        
-    Returns:
-        Dicionário com dados formatados ou None em caso de erro
     """
     try:
-        from .elasticsearch_formatter import format_documents_for_elasticsearch
+        from .elasticsearch_formatter import (
+            format_documents_for_elasticsearch,
+            save_bulk_file,
+            save_mapping_file
+        )
         
         if not data:
             log.warning("Nenhum dado fornecido para exportação Elasticsearch")
@@ -104,49 +102,42 @@ def export_to_elasticsearch_format(
         # Formata documentos
         elasticsearch_output = format_documents_for_elasticsearch(documents, index_name)
         
-        # Adiciona informações do mapeamento se solicitado
-        if include_mapping:
-            output_structure = {
-                "elasticsearch_ready": True,
-                "index_name": index_name,
-                "mapping": elasticsearch_output["index_mapping"],
-                "bulk_data_lines": len(elasticsearch_output["bulk_data"]),
-                "total_documents": elasticsearch_output["total_documents"],
-                "formatted_at": elasticsearch_output["formatted_at"],
-                "bulk_data": elasticsearch_output["bulk_data"][:10] if len(elasticsearch_output["bulk_data"]) > 10 else elasticsearch_output["bulk_data"]  # Mostra apenas primeiras 10 linhas
-            }
-        else:
-            output_structure = {
-                "elasticsearch_ready": True,
-                "index_name": index_name,
-                "bulk_data": elasticsearch_output["bulk_data"],
-                "total_documents": elasticsearch_output["total_documents"]
-            }
-        
-        # Exibe saída
-        print("\n--- Dados Formatados para Elasticsearch ---")
-        print(f"Índice: {index_name}")
-        print(f"Documentos: {elasticsearch_output['total_documents']}")
-        print(f"Linhas bulk API: {len(elasticsearch_output['bulk_data'])}")
-        
-        if include_mapping:
-            print("Mapeamento do índice incluído.")
-        
-        print("--- Exemplo das primeiras linhas bulk ---")
-        for i, line in enumerate(elasticsearch_output["bulk_data"][:4]):
-            print(f"Linha {i+1}: {line}")
-        print("------------------------------------------")
-        
-        # Salva em arquivo se especificado
+        # Salva arquivos separados
         if output_file:
-            try:
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    json.dump(output_structure, f, indent=2, ensure_ascii=False)
-                log.info(f"Dados Elasticsearch salvos em '{output_file}'")
-            except IOError as e:
-                log.error(f"Erro ao salvar arquivo Elasticsearch: {e}")
+            # Arquivo bulk (.ndjson)
+            bulk_file = output_file.replace('.json', '_bulk.ndjson')
+            save_bulk_file(elasticsearch_output["bulk_file"], bulk_file)
+            
+            # Arquivo de mapeamento (.json)
+            mapping_file = output_file.replace('.json', '_mapping.json')
+            save_mapping_file(elasticsearch_output["index_mapping"], mapping_file)
+            
+            # Arquivo de resumo
+            summary = {
+                "elasticsearch_ready": True,
+                "index_name": index_name,
+                "total_documents": elasticsearch_output["total_documents"],
+                "total_bulk_lines": elasticsearch_output["total_bulk_lines"],
+                "formatted_at": elasticsearch_output["formatted_at"],
+                "files": {
+                    "bulk_data": bulk_file,
+                    "mapping": mapping_file
+                },
+                "import_commands": {
+                    "create_index": f"curl -X PUT 'localhost:9200/{index_name}' -H 'Content-Type: application/json' -d @{mapping_file}",
+                    "bulk_import": f"curl -X POST 'localhost:9200/_bulk' -H 'Content-Type: application/x-ndjson' --data-binary @{bulk_file}"
+                }
+            }
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
+            
+            log.info(f"Exportação Elasticsearch completa:")
+            log.info(f"  - Resumo: {output_file}")
+            log.info(f"  - Dados bulk: {bulk_file}")
+            log.info(f"  - Mapeamento: {mapping_file}")
         
-        return output_structure
+        return elasticsearch_output
         
     except ImportError:
         log.error("ElasticsearchFormatter não encontrado. Verifique se o módulo está instalado.")
@@ -166,7 +157,8 @@ def format_scraped_item(doc: Dict[str, Any]) -> Dict[str, Any]:
     data_seculos = ", ".join(seculos) if seculos else ""
 
     result = {
-        "_id": str(doc.get("_id", "")),
+        # CORREÇÃO APLICADA: Garante que o _id nunca é vazio, usando um fallback único
+        "_id": str(doc.get("_id", doc.get("document_id", f"missing_id_{os.getpid()}"))),
         "is_scraped_item": True,
         "score": doc.get("score", 1.0),
         "processed_at": doc.get("processed_at", ""),
@@ -198,7 +190,8 @@ def format_pdf_document(doc: Dict[str, Any]) -> Dict[str, Any]:
     Format a PDF document for API response.
     """
     return {
-        "_id": str(doc.get("_id", "")),
+        # CORREÇÃO APLICADA: Garante que o _id nunca é vazio, usando um fallback único
+        "_id": str(doc.get("_id", doc.get("document_id", f"missing_id_{os.getpid()}"))),
         "filename": doc.get("filename", ""),
         "text": doc.get("text", ""),
         "names": doc.get("names", []),
@@ -268,4 +261,3 @@ if __name__ == '__main__':
     
     results_error = {"conjunto": {"a", "b"}}
     format_and_output_json(results_error)
-
